@@ -1,8 +1,23 @@
 import SwiftUI
 
+enum ProjectListMode: String, CaseIterable, Identifiable {
+    case recent, scanned
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .recent: return "Недавние"
+        case .scanned: return "Все найденные"
+        }
+    }
+}
+
 struct ContentView: View {
     @EnvironmentObject var manager: BlenderManager
     @State private var filter = ""
+    @State private var listMode: ProjectListMode = .recent
+    @State private var selection: RecentFile.ID?
     @AppStorage("appearanceMode") private var appearanceModeRaw: String = AppearanceMode.system.rawValue
 
     private var currentAppearance: AppearanceMode {
@@ -15,10 +30,15 @@ struct ContentView: View {
         appearanceModeRaw = modes[(index + 1) % modes.count].rawValue
     }
 
-    private var filteredFiles: [RecentFile] {
-        filter.isEmpty
-            ? manager.recentFiles
-            : manager.recentFiles.filter { $0.name.localizedCaseInsensitiveContains(filter) }
+    private var projects: [RecentFile] {
+        let base = listMode == .recent ? manager.recentFiles : manager.scannedProjects
+        guard !filter.isEmpty else { return base }
+        return base.filter { $0.name.localizedCaseInsensitiveContains(filter) }
+    }
+
+    /// Выделение живёт поверх обоих списков — ищем в том, что сейчас на экране.
+    private var selectedFile: RecentFile? {
+        projects.first { $0.id == selection } ?? manager.autosaves.first { $0.id == selection }
     }
 
     var body: some View {
@@ -26,67 +46,107 @@ struct ContentView: View {
             if !manager.isInstalled {
                 notInstalledBanner
             }
+
             HSplitView {
-                SectionPane(
-                    title: "Последние проекты",
-                    icon: "clock.arrow.circlepath",
-                    tint: Theme.accentSecondary,
-                    files: filteredFiles,
-                    emptyIcon: "tray",
-                    emptyText: "Список пуст",
-                    filter: $filter,
-                    rowIcon: "doc.fill"
-                )
-                SectionPane(
-                    title: "Автосейвы",
-                    icon: "exclamationmark.triangle.fill",
-                    tint: Theme.warning,
-                    files: manager.recentAutosaves,
-                    emptyIcon: "checkmark.circle",
-                    emptyText: "Автосейвов не найдено",
-                    filter: nil,
-                    rowIcon: "doc.badge.gearshape.fill"
-                )
+                projectsPane
+                autosavesPane
             }
+
+            Divider()
+            ActionBar(selected: selectedFile)
         }
         .onAppear { manager.refreshAll() }
+        .onExitCommand { selection = nil }
         .navigationTitle("Blender Launcher")
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    cycleAppearance()
-                } label: {
-                    Image(systemName: currentAppearance.icon)
-                }
-                .help("Тема: \(currentAppearance.label) — клик переключает")
+        .toolbar { toolbarContent }
+    }
+
+    // MARK: - Панели
+
+    private var projectsPane: some View {
+        SectionPane(
+            title: "Проекты",
+            icon: "cube.fill",
+            tint: Theme.accentSecondary,
+            files: projects,
+            emptyIcon: listMode == .recent ? "tray" : "magnifyingglass",
+            emptyText: emptyProjectsText,
+            rowIcon: "doc.fill",
+            isLoading: listMode == .scanned && manager.isScanning,
+            selection: $selection,
+            filter: $filter,
+            modePicker: $listMode
+        )
+    }
+
+    private var autosavesPane: some View {
+        SectionPane(
+            title: "Автосейвы",
+            icon: "exclamationmark.triangle.fill",
+            tint: Theme.warning,
+            files: manager.autosaves,
+            emptyIcon: "checkmark.circle",
+            emptyText: "Автосейвов не найдено",
+            rowIcon: "clock.badge.exclamationmark.fill",
+            isLoading: false,
+            selection: $selection,
+            filter: nil,
+            modePicker: nil
+        )
+    }
+
+    private var emptyProjectsText: String {
+        if listMode == .scanned {
+            if manager.isScanning { return "Ищем .blend файлы…" }
+            if manager.scanner.looksBlocked {
+                return "Ничего не найдено. Проверьте доступ к папкам в Системных настройках → Конфиденциальность."
             }
-            ToolbarItem(placement: .automatic) {
-                Button {
-                    manager.refreshAll()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .help("Обновить списки")
+            return "Файлы .blend не найдены"
+        }
+        return "Список пуст"
+    }
+
+    // MARK: - Toolbar
+
+    @ToolbarContentBuilder
+    private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .automatic) {
+            Button {
+                cycleAppearance()
+            } label: {
+                Image(systemName: currentAppearance.icon)
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    manager.launchNewInstance()
-                } label: {
-                    Label("Новое окно", systemImage: "plus.square.on.square")
-                }
-                .disabled(!manager.isInstalled)
-                .help("Открыть ещё одно независимое окно Blender")
+            .help("Тема: \(currentAppearance.label) — клик переключает")
+        }
+        ToolbarItem(placement: .automatic) {
+            Button {
+                manager.refreshAll()
+            } label: {
+                Image(systemName: "arrow.clockwise")
             }
-            ToolbarItem(placement: .primaryAction) {
-                Button {
-                    manager.launchMain()
-                } label: {
-                    Label("Запустить Blender", systemImage: "play.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.accent)
-                .disabled(!manager.isInstalled)
+            .help("Обновить списки")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            VersionPicker(style: .toolbar)
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                manager.launchNewInstance()
+            } label: {
+                Label("Новое окно", systemImage: "plus.square.on.square")
             }
+            .disabled(!manager.isInstalled)
+            .help("Открыть ещё одно независимое окно Blender")
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                manager.launchMain()
+            } label: {
+                Label("Запустить Blender", systemImage: "play.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.accent)
+            .disabled(!manager.isInstalled)
         }
     }
 
@@ -94,10 +154,10 @@ struct ContentView: View {
         HStack(spacing: 10) {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(Theme.warning)
-            Text("Blender.app не найден: \(manager.blenderAppPath)")
+            Text("Blender не найден на диске")
                 .font(.system(size: 12))
             Spacer()
-            Button("Выбрать…") { manager.chooseBlenderApp() }
+            Button("Указать вручную…") { manager.installs.addInstallViaPanel() }
                 .controlSize(.small)
         }
         .padding(.horizontal, 14)
@@ -105,6 +165,96 @@ struct ContentView: View {
         .background(Theme.warning.opacity(0.12))
     }
 }
+
+// MARK: - Нижняя панель действий
+
+private struct ActionBar: View {
+    @EnvironmentObject var manager: BlenderManager
+    let selected: RecentFile?
+
+    var body: some View {
+        HStack(spacing: 10) {
+            if let selected {
+                Image(systemName: "doc.fill")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.accentSecondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(selected.name)
+                        .font(.system(size: 12, weight: .medium))
+                        .lineLimit(1)
+                    Text(selected.directory)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+            } else {
+                Text("Проект не выбран")
+                    .font(.system(size: 12))
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer(minLength: 12)
+
+            VersionPicker(style: .compact)
+
+            Button {
+                if let selected {
+                    manager.launchNewInstance(openingFile: selected.path)
+                }
+            } label: {
+                Label("Открыть", systemImage: "arrow.up.forward.app.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(Theme.accent)
+            .disabled(selected == nil || !manager.isInstalled)
+            .keyboardShortcut(.return, modifiers: [])
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.bar)
+    }
+}
+
+// MARK: - Выбор версии Blender
+
+private struct VersionPicker: View {
+    enum Style { case toolbar, compact }
+
+    @EnvironmentObject var manager: BlenderManager
+    let style: Style
+
+    var body: some View {
+        Menu {
+            ForEach(manager.installs.installs) { install in
+                Button {
+                    manager.installs.activeInstallID = install.id
+                } label: {
+                    if install.id == manager.installs.activeInstall?.id {
+                        Label(install.displayName, systemImage: "checkmark")
+                    } else {
+                        Text(install.displayName)
+                    }
+                }
+            }
+            Divider()
+            Button("Добавить версию…") { manager.installs.addInstallViaPanel() }
+            Button("Обновить список версий") { manager.installs.refresh() }
+        } label: {
+            Label(
+                manager.installs.activeInstall?.displayName ?? "Blender не найден",
+                systemImage: "shippingbox.fill"
+            )
+            .font(.system(size: 12))
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .disabled(!manager.isInstalled)
+        .help("Версия Blender для запуска")
+    }
+}
+
+// MARK: - Панель со списком
 
 private struct SectionPane: View {
     @EnvironmentObject var manager: BlenderManager
@@ -114,27 +264,51 @@ private struct SectionPane: View {
     let files: [RecentFile]
     let emptyIcon: String
     let emptyText: String
+    let rowIcon: String
+    let isLoading: Bool
+    @Binding var selection: RecentFile.ID?
     var filter: Binding<String>?
-    var rowIcon: String
+    var modePicker: Binding<ProjectListMode>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             sectionHeader
+            if let modePicker {
+                Picker("", selection: modePicker) {
+                    ForEach(ProjectListMode.allCases) { mode in
+                        Text(mode.label).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .padding(.horizontal, 14)
+                .padding(.bottom, 8)
+            }
             if let filter {
                 searchField(filter)
             }
             Divider().opacity(0.5)
+
             if files.isEmpty {
                 emptyState
             } else {
                 ScrollView {
                     LazyVStack(spacing: 2) {
                         ForEach(files) { file in
-                            FileRow(file: file, tint: tint, icon: rowIcon)
+                            FileRow(
+                                file: file,
+                                tint: tint,
+                                icon: rowIcon,
+                                isSelected: selection == file.id,
+                                onSelect: { selection = file.id }
+                            )
                         }
                     }
                     .padding(8)
                 }
+                // Клик по пустому месту снимает выделение.
+                .contentShape(Rectangle())
+                .onTapGesture { selection = nil }
             }
         }
         .frame(minWidth: 320)
@@ -154,6 +328,11 @@ private struct SectionPane: View {
             Text(title)
                 .font(.system(size: 13, weight: .semibold))
             Spacer()
+            if isLoading {
+                ProgressView()
+                    .controlSize(.small)
+                    .scaleEffect(0.7)
+            }
             Text("\(files.count)")
                 .font(.system(size: 11, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -191,33 +370,40 @@ private struct SectionPane: View {
             Text(emptyText)
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
             Spacer()
         }
         .frame(maxWidth: .infinity)
     }
 }
 
+// MARK: - Строка файла
+
 private struct FileRow: View {
     @EnvironmentObject var manager: BlenderManager
     let file: RecentFile
     let tint: Color
     let icon: String
+    let isSelected: Bool
+    let onSelect: () -> Void
     @State private var hovering = false
 
     var body: some View {
         HStack(spacing: 10) {
             Image(systemName: icon)
                 .font(.system(size: 14))
-                .foregroundStyle(tint)
+                .foregroundStyle(isSelected ? .white : tint)
                 .frame(width: 22)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(file.name)
                     .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(isSelected ? .white : .primary)
                     .lineLimit(1)
-                Text(file.directory)
+                Text(subtitle)
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.75) : .secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
             }
@@ -227,37 +413,54 @@ private struct FileRow: View {
             if let modified = file.modified {
                 Text(relative(modified))
                     .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(isSelected ? Color.white.opacity(0.75) : .secondary)
             }
-
-            Button {
-                manager.launchNewInstance(openingFile: file.path)
-            } label: {
-                Image(systemName: "arrow.up.forward.app")
-                    .font(.system(size: 12))
-            }
-            .buttonStyle(.borderless)
-            .opacity(hovering ? 1 : 0)
-            .help("Открыть в новом окне Blender")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(hovering ? Color.primary.opacity(0.06) : Color.clear)
+                .fill(background)
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
+        // Двойной клик объявляем первым, иначе одиночный съедает его.
         .onTapGesture(count: 2) {
+            onSelect()
             manager.launchNewInstance(openingFile: file.path)
         }
+        .onTapGesture(count: 1) { onSelect() }
         .contextMenu {
             Button("Открыть в новом окне Blender") {
                 manager.launchNewInstance(openingFile: file.path)
             }
+            if manager.installs.installs.count > 1 {
+                Menu("Открыть в версии") {
+                    ForEach(manager.installs.installs) { install in
+                        Button(install.displayName) {
+                            manager.launchNewInstance(openingFile: file.path, install: install)
+                        }
+                    }
+                }
+            }
+            Divider()
             Button("Показать в Finder") {
                 manager.revealInFinder(file)
             }
+        }
+    }
+
+    private var background: Color {
+        if isSelected { return Theme.accent }
+        return hovering ? Color.primary.opacity(0.06) : .clear
+    }
+
+    /// У автосейвов важнее, откуда они, чем полный путь.
+    private var subtitle: String {
+        switch file.source {
+        case .autosaveTemp: return "Временная папка системы"
+        case .autosaveProject: return "\(file.url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent)/.autosave"
+        case .recent, .scanned: return file.directory
         }
     }
 
