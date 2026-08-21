@@ -86,26 +86,29 @@ final class ProjectScanner: ObservableObject {
         var result: [RecentFile] = []
 
         for directory in directories.union(extraDirectories) {
-            let autosaveDir = directory.appendingPathComponent(".autosave")
-            var isDir: ObjCBool = false
-            guard fm.fileExists(atPath: autosaveDir.path, isDirectory: &isDir), isDir.boolValue else {
-                continue
-            }
-            guard let items = try? fm.contentsOfDirectory(
-                at: autosaveDir,
-                includingPropertiesForKeys: [.contentModificationDateKey]
-            ) else { continue }
-
-            result += items
-                .filter { $0.pathExtension == "blend" }
-                .map { url in
-                    RecentFile(
-                        url: url,
-                        modified: (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
-                            .contentModificationDate,
-                        source: .autosaveProject
-                    )
+            // Blender называет папку и с точкой, и без — встречаются обе.
+            for folderName in [".autosave", "autosave"] {
+                let autosaveDir = directory.appendingPathComponent(folderName)
+                var isDir: ObjCBool = false
+                guard fm.fileExists(atPath: autosaveDir.path, isDirectory: &isDir), isDir.boolValue else {
+                    continue
                 }
+                guard let items = try? fm.contentsOfDirectory(
+                    at: autosaveDir,
+                    includingPropertiesForKeys: [.contentModificationDateKey]
+                ) else { continue }
+
+                result += items
+                    .filter { $0.pathExtension == "blend" }
+                    .map { url in
+                        RecentFile(
+                            url: url,
+                            modified: (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?
+                                .contentModificationDate,
+                            source: .autosaveProject
+                        )
+                    }
+            }
         }
 
         return result.sorted { ($0.modified ?? .distantPast) > ($1.modified ?? .distantPast) }
@@ -130,6 +133,9 @@ final class ProjectScanner: ObservableObject {
         if path.contains("/addons/") || path.contains("/presets/") || path.contains("/extensions/") {
             return false
         }
+        // Автосейвам место в своей панели, а не среди проектов. Папка бывает и скрытой,
+        // и обычной — видимую Spotlight индексирует, поэтому она сюда и попадала.
+        if path.contains("/.autosave/") || path.contains("/autosave/") { return false }
         return true
     }
 }

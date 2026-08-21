@@ -27,6 +27,16 @@ macOS не открывает второй экземпляр Blender: клик 
 
 ## Возможности
 
+**Избранные проекты.** Звёздочка у строки закрепляет проект в отдельной вкладке,
+чтобы не искать его в общем списке каждый раз. <kbd>⌘D</kbd> добавляет выбранный.
+
+<img src="docs/assets/screenshot-favorites.jpg" alt="Вкладка «Избранные» со списком закреплённых проектов">
+
+Отметка хранится по пути к файлу, а не по записи в истории Blender — проект
+останется в избранном, даже когда Blender вытеснит его из своего списка недавних.
+Пропавший файл не исчезает молча: остаётся перечёркнутым с пометкой
+«Файл не найден», чтобы было видно, что потерялся именно он.
+
 **Несколько окон Blender.** Отдельный процесс на каждое окно — своя сцена, свой
 рендер, свой краш. <kbd>⌘N</kbd> открывает следующее.
 
@@ -77,6 +87,11 @@ xattr -cr "/Applications/Blender Launcher.app"
 Второе место легко пропустить: Spotlight не индексирует скрытые папки. На
 рабочей машине это была разница между 2 и 15 найденными автосейвами.
 
+Папка рядом с проектом встречается в двух видах — скрытая `.autosave` и обычная
+`autosave`. Скрытую Spotlight не видит, зато содержимое обычной он индексирует,
+и без фильтра автосейвы попадают в список проектов. Лаунчер обрабатывает оба
+случая: ищет автосейвы в обеих формах и не пускает их в проекты.
+
 Полный обход домашней папки стоил бы около 20 секунд, поэтому лаунчер смотрит
 в `.autosave` только внутри директорий, где уже известны проекты — это
 несколько десятков проверок вместо рекурсии по всему диску.
@@ -105,6 +120,7 @@ cd blender-launcher
 | `Sources/BlenderLauncher/BlenderManager.swift` | Состояние, недавние файлы, запуск процессов |
 | `Sources/BlenderLauncher/ProjectScanner.swift` | Поиск `.blend` через `NSMetadataQuery`, обход `.autosave` |
 | `Sources/BlenderLauncher/BlenderInstall.swift` | Поиск установок Blender и их версий |
+| `Sources/BlenderLauncher/FavoritesStore.swift` | Избранные проекты |
 | `Sources/BlenderLauncher/ContentView.swift` | Интерфейс |
 | `Sources/BlenderLauncher/Theme.swift` | Цвета и режимы оформления |
 
@@ -140,8 +156,12 @@ focuses the existing window. This launcher spawns independent instances by
 executing the binary inside the bundle directly, and adds a project browser
 that reads Blender's recent-files list, finds `.blend` files across the home
 folder via Spotlight, and surfaces autosaves from **both** locations Blender
-uses (the system temp folder and the hidden `.autosave` directory next to each
-project — the latter is invisible to Spotlight).
+uses (the system temp folder and the `.autosave` directory next to each
+project — invisible to Spotlight when hidden).
+
+Projects can be starred into a Favorites tab; the star is stored by file path,
+so it survives Blender forgetting the file, and a starred file that goes missing
+is shown struck through rather than silently dropped.
 
 Native SwiftUI, no Electron. macOS 13+, Apple Silicon only.
 Download from [Releases][latest]; build with `./build.sh`.

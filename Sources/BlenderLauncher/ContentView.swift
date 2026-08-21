@@ -1,14 +1,15 @@
 import SwiftUI
 
 enum ProjectListMode: String, CaseIterable, Identifiable {
-    case recent, scanned
+    case favorites, recent, scanned
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
+        case .favorites: return "Избранные"
         case .recent: return "Недавние"
-        case .scanned: return "Все найденные"
+        case .scanned: return "Все"
         }
     }
 }
@@ -16,9 +17,18 @@ enum ProjectListMode: String, CaseIterable, Identifiable {
 struct ContentView: View {
     @EnvironmentObject var manager: BlenderManager
     @State private var filter = ""
-    @State private var listMode: ProjectListMode = .recent
     @State private var selection: RecentFile.ID?
     @AppStorage("appearanceMode") private var appearanceModeRaw: String = AppearanceMode.system.rawValue
+    @AppStorage("projectListMode") private var listModeRaw: String = ProjectListMode.recent.rawValue
+
+    private var listMode: ProjectListMode {
+        get { ProjectListMode(rawValue: listModeRaw) ?? .recent }
+        nonmutating set { listModeRaw = newValue.rawValue }
+    }
+
+    private var listModeBinding: Binding<ProjectListMode> {
+        Binding(get: { listMode }, set: { listMode = $0 })
+    }
 
     private var currentAppearance: AppearanceMode {
         AppearanceMode(rawValue: appearanceModeRaw) ?? .system
@@ -31,7 +41,12 @@ struct ContentView: View {
     }
 
     private var projects: [RecentFile] {
-        let base = listMode == .recent ? manager.recentFiles : manager.scannedProjects
+        let base: [RecentFile]
+        switch listMode {
+        case .favorites: base = manager.favoriteProjects
+        case .recent: base = manager.recentFiles
+        case .scanned: base = manager.scannedProjects
+        }
         guard !filter.isEmpty else { return base }
         return base.filter { $0.name.localizedCaseInsensitiveContains(filter) }
     }
@@ -69,13 +84,13 @@ struct ContentView: View {
             icon: "cube.fill",
             tint: Theme.accentSecondary,
             files: projects,
-            emptyIcon: listMode == .recent ? "tray" : "magnifyingglass",
+            emptyIcon: emptyProjectsIcon,
             emptyText: emptyProjectsText,
             rowIcon: "doc.fill",
             isLoading: listMode == .scanned && manager.isScanning,
             selection: $selection,
             filter: $filter,
-            modePicker: $listMode
+            modePicker: listModeBinding
         )
     }
 
@@ -95,15 +110,27 @@ struct ContentView: View {
         )
     }
 
+    private var emptyProjectsIcon: String {
+        switch listMode {
+        case .favorites: return "star"
+        case .recent: return "tray"
+        case .scanned: return "magnifyingglass"
+        }
+    }
+
     private var emptyProjectsText: String {
-        if listMode == .scanned {
+        switch listMode {
+        case .favorites:
+            return "Пока пусто. Нажмите звёздочку у проекта, чтобы он всегда был здесь."
+        case .recent:
+            return "Список пуст"
+        case .scanned:
             if manager.isScanning { return "Ищем .blend файлы…" }
             if manager.scanner.looksBlocked {
                 return "Ничего не найдено. Проверьте доступ к папкам в Системных настройках → Конфиденциальность."
             }
             return "Файлы .blend не найдены"
         }
-        return "Список пуст"
     }
 
     // MARK: - Toolbar
@@ -172,6 +199,19 @@ private struct ActionBar: View {
     @EnvironmentObject var manager: BlenderManager
     let selected: RecentFile?
 
+    private var isSelectedFavorite: Bool {
+        guard let selected else { return false }
+        return manager.isFavorite(selected)
+    }
+
+    private var canFavoriteSelected: Bool {
+        guard let selected else { return false }
+        switch selected.source {
+        case .recent, .scanned, .favorite: return true
+        case .autosaveTemp, .autosaveProject: return false
+        }
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             if let selected {
@@ -196,6 +236,17 @@ private struct ActionBar: View {
 
             Spacer(minLength: 12)
 
+            Button {
+                if let selected { manager.toggleFavorite(selected) }
+            } label: {
+                Image(systemName: isSelectedFavorite ? "star.fill" : "star")
+                    .foregroundStyle(isSelectedFavorite ? Theme.accent : .secondary)
+            }
+            .buttonStyle(.borderless)
+            .disabled(selected == nil || !canFavoriteSelected)
+            .keyboardShortcut("d", modifiers: .command)
+            .help(isSelectedFavorite ? "Убрать из избранного (⌘D)" : "В избранное (⌘D)")
+
             VersionPicker(style: .compact)
 
             Button {
@@ -207,7 +258,7 @@ private struct ActionBar: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(Theme.accent)
-            .disabled(selected == nil || !manager.isInstalled)
+            .disabled(selected == nil || selected?.isMissing == true || !manager.isInstalled)
             .keyboardShortcut(.return, modifiers: [])
         }
         .padding(.horizontal, 14)
@@ -391,16 +442,17 @@ private struct FileRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: icon)
+            Image(systemName: file.isMissing ? "questionmark.folder" : icon)
                 .font(.system(size: 14))
-                .foregroundStyle(isSelected ? .white : tint)
+                .foregroundStyle(isSelected ? .white : (file.isMissing ? .secondary : tint))
                 .frame(width: 22)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(file.name)
                     .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(isSelected ? .white : .primary)
+                    .foregroundStyle(isSelected ? .white : (file.isMissing ? .secondary : .primary))
                     .lineLimit(1)
+                    .strikethrough(file.isMissing, color: .secondary)
                 Text(subtitle)
                     .font(.system(size: 11))
                     .foregroundStyle(isSelected ? Color.white.opacity(0.75) : .secondary)
@@ -415,6 +467,20 @@ private struct FileRow: View {
                     .font(.system(size: 11))
                     .foregroundStyle(isSelected ? Color.white.opacity(0.75) : .secondary)
             }
+
+            if canFavorite {
+                Button {
+                    manager.toggleFavorite(file)
+                } label: {
+                    Image(systemName: isFavorite ? "star.fill" : "star")
+                        .font(.system(size: 12))
+                        .foregroundStyle(starColor)
+                }
+                .buttonStyle(.plain)
+                // Пустое место сохраняем всегда, иначе строки дёргаются при наведении.
+                .opacity(isFavorite || hovering ? 1 : 0)
+                .help(isFavorite ? "Убрать из избранного" : "В избранное")
+            }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -427,6 +493,7 @@ private struct FileRow: View {
         // Двойной клик объявляем первым, иначе одиночный съедает его.
         .onTapGesture(count: 2) {
             onSelect()
+            guard !file.isMissing else { return }
             manager.launchNewInstance(openingFile: file.path)
         }
         .onTapGesture(count: 1) { onSelect() }
@@ -443,11 +510,33 @@ private struct FileRow: View {
                     }
                 }
             }
+            if canFavorite {
+                Divider()
+                Button(isFavorite ? "Убрать из избранного" : "В избранное") {
+                    manager.toggleFavorite(file)
+                }
+            }
             Divider()
             Button("Показать в Finder") {
                 manager.revealInFinder(file)
             }
+            .disabled(file.isMissing)
         }
+    }
+
+    /// Автосейвы временные — держать их в избранном смысла нет.
+    private var canFavorite: Bool {
+        switch file.source {
+        case .recent, .scanned, .favorite: return true
+        case .autosaveTemp, .autosaveProject: return false
+        }
+    }
+
+    private var isFavorite: Bool { manager.isFavorite(file) }
+
+    private var starColor: Color {
+        if isSelected { return .white }
+        return isFavorite ? Theme.accent : .secondary
     }
 
     private var background: Color {
@@ -457,10 +546,14 @@ private struct FileRow: View {
 
     /// У автосейвов важнее, откуда они, чем полный путь.
     private var subtitle: String {
+        if file.isMissing { return "Файл не найден — \(file.directory)" }
         switch file.source {
         case .autosaveTemp: return "Временная папка системы"
-        case .autosaveProject: return "\(file.url.deletingLastPathComponent().deletingLastPathComponent().lastPathComponent)/.autosave"
-        case .recent, .scanned: return file.directory
+        case .autosaveProject:
+            let autosaveDir = file.url.deletingLastPathComponent()
+            let projectDir = autosaveDir.deletingLastPathComponent()
+            return "\(projectDir.lastPathComponent)/\(autosaveDir.lastPathComponent)"
+        case .recent, .scanned, .favorite: return file.directory
         }
     }
 

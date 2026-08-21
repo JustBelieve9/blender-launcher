@@ -5,6 +5,7 @@ import Foundation
 enum FileSource {
     case recent
     case scanned
+    case favorite
     /// $TMPDIR/<имя>_<PID>_autosave.blend — схема до Blender 5.x.
     case autosaveTemp
     /// <папка проекта>/.autosave/<имя>_<timestamp>.blend — схема Blender 5.x.
@@ -15,6 +16,8 @@ struct RecentFile: Identifiable, Hashable {
     let url: URL
     let modified: Date?
     var source: FileSource = .recent
+    /// Файл был в избранном, но его больше нет на диске.
+    var isMissing: Bool = false
 
     /// Идентификатор по пути, а не UUID: иначе выделение слетало бы после каждого обновления списка.
     var id: String { url.path }
@@ -33,6 +36,7 @@ final class BlenderManager: ObservableObject {
 
     let installs = BlenderInstallStore()
     let scanner = ProjectScanner()
+    let favorites = FavoritesStore()
 
     private let fm = FileManager.default
     private var cancellables: Set<AnyCancellable> = []
@@ -44,6 +48,10 @@ final class BlenderManager: ObservableObject {
             .store(in: &cancellables)
 
         scanner.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+
+        favorites.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
 
@@ -59,6 +67,11 @@ final class BlenderManager: ObservableObject {
     var isInstalled: Bool { installs.hasAnyInstall }
     var scannedProjects: [RecentFile] { scanner.scannedProjects }
     var isScanning: Bool { scanner.isScanning }
+    var favoriteProjects: [RecentFile] { favorites.files() }
+
+    func isFavorite(_ file: RecentFile) -> Bool { favorites.contains(file.path) }
+
+    func toggleFavorite(_ file: RecentFile) { favorites.toggle(file.path) }
 
     func refreshAll() {
         recentFiles = loadRecentFiles()
